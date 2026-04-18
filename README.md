@@ -42,6 +42,29 @@ pytest -q
 python -m kalshi_tradr.main
 ```
 
+### Option C — Local Kubernetes (kind / k3d / minikube / Docker Desktop)
+
+Kustomize manifests live in [`k8s/`](./k8s) with their own [README](./k8s/README.md). TL;DR:
+
+```bash
+docker build -t kalshi-tradr:local .
+kind load docker-image kalshi-tradr:local         # or k3d/minikube equivalent
+
+kubectl create namespace kalshi-tradr --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n kalshi-tradr create secret generic kalshi-tradr-secrets \
+  --from-literal=TELEGRAM_BOT_TOKEN='…' \
+  --from-literal=TELEGRAM_ALLOWED_CHAT_IDS='11111111,22222222' \
+  --from-literal=KALSHI_API_KEY_ID='…' \
+  --from-literal=POSTGRES_USER='kalshi' \
+  --from-literal=POSTGRES_PASSWORD='kalshi' \
+  --from-literal=POSTGRES_DB='kalshi_tradr' \
+  --from-literal=DATABASE_URL='postgresql://kalshi:kalshi@postgres:5432/kalshi_tradr' \
+  --from-file=kalshi.pem=./secrets/kalshi.pem
+
+kubectl apply -k k8s/
+kubectl -n kalshi-tradr logs -f deploy/bot
+```
+
 ## Environment
 
 See [`.env.example`](./.env.example) for the full list. Required:
