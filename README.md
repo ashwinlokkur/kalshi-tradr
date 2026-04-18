@@ -14,22 +14,31 @@ Telegram-driven trading bot for the [Kalshi](https://kalshi.com) prediction mark
 
 ## Quick start
 
+### Option A — Docker Compose (bundled Postgres)
+
 ```bash
-# 1. install deps (Python 3.11+)
+# 1. configure
+cp .env.example .env
+# edit .env (TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_CHAT_IDS, KALSHI_API_KEY_ID)
+# DATABASE_URL is overridden by compose, so leave it blank or as-is.
+# drop your Kalshi PEM at ./secrets/kalshi.pem
+
+# 2. build + run
+docker compose up --build
+
+# logs: docker compose logs -f bot
+# psql into the bundled db:  psql postgresql://kalshi:kalshi@localhost:5432/kalshi_tradr
+```
+
+### Option B — Local Python (bring your own Postgres)
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 2. configure
 cp .env.example .env
 # edit .env and drop your Kalshi PEM at ./secrets/kalshi.pem
-
-# 3. create the database
 createdb kalshi_tradr
-
-# 4. run tests
 pytest -q
-
-# 5. start the bot (long-polls Telegram)
 python -m kalshi_tradr.main
 ```
 
