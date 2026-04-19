@@ -141,22 +141,34 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.message is not None
 
     raw = " ".join(context.args or []).strip()
+    log.info("cmd_bet: chat=%s user=%s raw=%r", update.effective_chat.id if update.effective_chat else None, update.effective_user.id if update.effective_user else None, raw)
     if not raw:
         await update.message.reply_text("Usage: /bet <text> [amount]\nEx: /bet warriors vs lakers 25")
         return
 
     query_text, amount_usd = matcher.parse_amount_tail(raw)
+    log.info("cmd_bet: query_text=%r amount_usd=%s", query_text, amount_usd)
     try:
-        candidates = await matcher.find_candidates(deps.kalshi, query_text, top_k=3)
+        result = await matcher.find_candidates(deps.kalshi, query_text, top_k=3)
     except KalshiAPIError as e:
         await update.message.reply_text(f"Kalshi error: {e}")
         return
 
-    if not candidates:
-        await update.message.reply_text(f"No matching market for: {query_text!r}")
+    if not result.candidates:
+        lines = [
+            f"No matching market for: {query_text!r}",
+            f"Tokens searched: {', '.join(result.tokens) or '(none)'}",
+            f"Scanned {result.total_events} open events; {result.matched_events} matched on tokens but had no usable markets.",
+            f"Kalshi env: {deps.settings.kalshi_env}",
+        ]
+        if result.sample_titles:
+            lines.append("")
+            lines.append("A few open events right now:")
+            lines.extend(f"- {t}" for t in result.sample_titles)
+        await update.message.reply_text("\n".join(lines))
         return
 
-    if len(candidates) > 1:
+    if len(result.candidates) > 1:
         buttons = [
             [
                 InlineKeyboardButton(
@@ -164,7 +176,7 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     callback_data=f"pick:{c.market.ticker}:{amount_usd or ''}",
                 )
             ]
-            for c in candidates
+            for c in result.candidates
         ]
         await update.message.reply_text(
             "Multiple markets match — pick one:", reply_markup=InlineKeyboardMarkup(buttons)
@@ -172,7 +184,8 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # Exactly one match
-    c = candidates[0]
+    c = result.candidates[0]
+    log.info("cmd_bet: single match ticker=%s score=%.2f", c.market.ticker, c.score)
     await _propose_bet(
         update=update,
         context=context,

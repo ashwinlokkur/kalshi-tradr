@@ -154,6 +154,9 @@ class KalshiAsyncClient:
                 raise KalshiAPIError(
                     f"{method} {path} failed: {resp.status_code} {resp.text}"
                 )
+            log.debug(
+                "kalshi %s %s → %d (%d bytes)", method, path, resp.status_code, len(resp.content or b"")
+            )
             if not resp.content:
                 return {}
             return resp.json()
@@ -225,29 +228,63 @@ class KalshiAsyncClient:
 
         out: list[Market] = []
         cursor: str | None = None
+        pages = 0
         for _ in range(max_pages):
             p = dict(params)
             if cursor:
                 p["cursor"] = cursor
             data = await self._request("GET", "/markets", params=p)
-            for m in data.get("markets", []) or []:
+            page_markets = data.get("markets", []) or []
+            for m in page_markets:
                 out.append(_parse_market(m))
+            pages += 1
+            log.info(
+                "kalshi: /markets page %d returned %d markets (total=%d, window=[%s,%s])",
+                pages, len(page_markets), len(out), min_close_ts, max_close_ts,
+            )
             cursor = data.get("cursor") or None
             if not cursor:
                 break
+        log.info("kalshi: /markets fetched %d markets across %d pages", len(out), pages)
         return out
 
     async def list_open_events(self, *, page_size: int = 200, max_pages: int = 10) -> list[Event]:
         params: dict[str, Any] = {"status": "open", "limit": page_size, "with_nested_markets": "true"}
         out: list[Event] = []
         cursor: str | None = None
+        pages = 0
         for _ in range(max_pages):
             p = dict(params)
             if cursor:
                 p["cursor"] = cursor
             data = await self._request("GET", "/events", params=p)
-            for e in data.get("events", []) or []:
+            page_events = data.get("events", []) or []
+            for e in page_events:
                 out.append(_parse_event(e))
+            pages += 1
+            log.info("kalshi: /events page %d returned %d events (total=%d)", pages, len(page_events), len(out))
+            cursor = data.get("cursor") or None
+            if not cursor:
+                break
+        log.info("kalshi: /events fetched %d events across %d pages", len(out), pages)
+        return out
+
+    async def list_markets_for_event(self, event_ticker: str, *, page_size: int = 200) -> list[Market]:
+        """Fetch all open markets belonging to a single event (fallback for empty nested markets)."""
+        params: dict[str, Any] = {
+            "status": "open",
+            "event_ticker": event_ticker,
+            "limit": page_size,
+        }
+        out: list[Market] = []
+        cursor: str | None = None
+        for _ in range(5):
+            p = dict(params)
+            if cursor:
+                p["cursor"] = cursor
+            data = await self._request("GET", "/markets", params=p)
+            for m in data.get("markets", []) or []:
+                out.append(_parse_market(m))
             cursor = data.get("cursor") or None
             if not cursor:
                 break
