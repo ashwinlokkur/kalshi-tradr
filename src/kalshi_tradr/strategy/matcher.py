@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..kalshi.client import KalshiAsyncClient
-from ..kalshi.types import Event, Market
+from ..kalshi.types import Event, Market, Series
 
 log = logging.getLogger(__name__)
 
@@ -42,17 +42,32 @@ _STOPWORDS = {
     "tomorrow",
 }
 
-# Minimal team / nickname aliases. Extend as needed; kept tiny on purpose.
+# Minimal team / nickname aliases. Each alias also tags the sport/league so
+# series-routing has something to grip on even for "gsw vs lakers".
 _ALIASES: dict[str, set[str]] = {
-    "gsw": {"warriors", "golden", "state"},
-    "lal": {"lakers"},
-    "bos": {"celtics"},
-    "nyk": {"knicks"},
-    "phi": {"sixers", "76ers"},
-    "mia": {"heat"},
-    "sac": {"kings"},
-    "nyy": {"yankees"},
-    "bkn": {"nets"},
+    # NBA
+    "gsw": {"warriors", "golden", "state", "nba", "basketball"},
+    "warriors": {"nba", "basketball"},
+    "lal": {"lakers", "nba", "basketball"},
+    "lakers": {"nba", "basketball"},
+    "bos": {"celtics", "nba", "basketball"},
+    "celtics": {"nba", "basketball"},
+    "nyk": {"knicks", "nba", "basketball"},
+    "knicks": {"nba", "basketball"},
+    "phi": {"sixers", "76ers", "nba", "basketball"},
+    "sixers": {"nba", "basketball"},
+    "mia": {"heat", "nba", "basketball"},
+    "heat": {"nba", "basketball"},
+    "sac": {"kings", "nba", "basketball"},
+    "bkn": {"nets", "nba", "basketball"},
+    # MLB
+    "nyy": {"yankees", "mlb", "baseball"},
+    "yankees": {"mlb", "baseball"},
+    # NFL (stub — extend as needed)
+    "nfl": {"football"},
+    "mlb": {"baseball"},
+    "nba": {"basketball"},
+    "nhl": {"hockey"},
 }
 
 
@@ -70,6 +85,24 @@ class MatchResult:
     matched_events: int
     candidates: list[MatchCandidate]
     sample_titles: list[str] = field(default_factory=list)
+    series_used: list[str] = field(default_factory=list)
+
+
+def score_series(tokens: list[str], series: Series) -> float:
+    if not tokens:
+        return 0.0
+    tags = " ".join(series.tags)
+    haystack = f"{series.ticker} {series.title} {series.category} {tags}".lower()
+    return sum(1.0 for tok in tokens if tok in haystack)
+
+
+def pick_series(
+    tokens: list[str], all_series: list[Series], *, top_k: int = 5
+) -> list[Series]:
+    scored = [(score_series(tokens, s), s) for s in all_series]
+    scored = [(n, s) for n, s in scored if n > 0]
+    scored.sort(key=lambda t: -t[0])
+    return [s for _, s in scored[:top_k]]
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -135,6 +168,42 @@ def rank_candidates(
     return scored[:top_k]
 
 
+async def _gather_events(
+    client: KalshiAsyncClient, tokens: list[str], *, top_series: int = 5
+) -> tuple[list[Event], list[str]]:
+    """Series-aware fetch. Returns (events, series_tickers_used).
+
+    Tries /series first: if any series titles/categories/tags overlap the
+    query tokens, only pulls events for those series. Otherwise falls back
+    to a broad /events fetch.
+    """
+    try:
+        all_series = await client.list_series()
+    except Exception as exc:  # pragma: no cover - defensive, fall back to broad fetch
+        log.warning("matcher: /series fetch failed (%s); broad-fetching /events", exc)
+        return await client.list_open_events(), []
+
+    chosen = pick_series(tokens, all_series, top_k=top_series)
+    if not chosen:
+        log.info(
+            "matcher: no series matched tokens (of %d series); broad /events fetch",
+            len(all_series),
+        )
+        return await client.list_open_events(), []
+
+    log.info(
+        "matcher: routed to %d series: %s",
+        len(chosen),
+        [(s.ticker, s.title) for s in chosen],
+    )
+    events: list[Event] = []
+    for s in chosen:
+        ev = await client.list_open_events(series_ticker=s.ticker)
+        log.info("matcher: series %s → %d events", s.ticker, len(ev))
+        events.extend(ev)
+    return events, [s.ticker for s in chosen]
+
+
 async def find_candidates(
     client: KalshiAsyncClient,
     text: str,
@@ -148,8 +217,10 @@ async def find_candidates(
     if not tokens:
         return MatchResult(tokens=tokens, total_events=0, matched_events=0, candidates=[])
 
-    events = await client.list_open_events()
-    log.info("matcher: fetched %d open events", len(events))
+    events, series_used = await _gather_events(client, tokens)
+    log.info(
+        "matcher: fetched %d open events (series_used=%s)", len(events), series_used
+    )
 
     # First pass: rank using whatever markets came inline with the event payload.
     candidates = rank_candidates(tokens, events, top_k=top_k)
@@ -212,4 +283,5 @@ async def find_candidates(
         matched_events=matched_events,
         candidates=candidates,
         sample_titles=sample,
+        series_used=series_used,
     )

@@ -21,6 +21,7 @@ def build_application(*, settings: Settings, db: Database, kalshi: KalshiAsyncCl
     app.add_handler(CommandHandler("status", handlers.cmd_status))
     app.add_handler(CommandHandler("scan", handlers.cmd_scan))
     app.add_handler(CommandHandler("search", handlers.cmd_search))
+    app.add_handler(CommandHandler("series", handlers.cmd_series))
     app.add_handler(CommandHandler("bet", handlers.cmd_bet))
     app.add_handler(CallbackQueryHandler(handlers.on_callback))
 

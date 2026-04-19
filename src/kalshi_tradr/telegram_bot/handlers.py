@@ -23,6 +23,7 @@ HELP_TEXT = (
     "  /scan              — lopsided markets closing in 1–3h\n"
     "  /bet <text> [amt]  — e.g. /bet warriors vs lakers 25\n"
     "  /search <text>     — list open events whose title matches <text>\n"
+    "  /series [text]     — list Kalshi series (categories), optionally filtered\n"
     "  /status            — balance, positions, resting orders\n"
     "  /help              — this message\n"
     "\n"
@@ -93,7 +94,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     try:
-        events = await deps.kalshi.list_open_events()
+        events, series_used = await matcher._gather_events(deps.kalshi, tokens)
     except KalshiAPIError as e:
         await update.message.reply_text(f"Kalshi error: {e}")
         return
@@ -105,6 +106,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     lines = [
         f"env: {deps.settings.kalshi_env}   tokens: {', '.join(tokens)}",
+        f"series routed: {', '.join(series_used) if series_used else '(none — broad /events fetch)'}",
         f"scanned {len(events)} open events; {len(scored)} matched.",
     ]
     if not top:
@@ -116,6 +118,45 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append("Top matches:")
         for s, e in top:
             lines.append(f"[{s:.0f}] {e.event_ticker}  {e.title[:80]}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_series(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Diagnostic: list Kalshi series (categories) available in the current env."""
+    deps = _deps(context)
+    if not _authorized(update, deps.settings):
+        return await _reject(update)
+    assert update.message is not None
+
+    raw = " ".join(context.args or []).strip().lower()
+    try:
+        all_series = await deps.kalshi.list_series()
+    except KalshiAPIError as e:
+        await update.message.reply_text(f"Kalshi error: {e}")
+        return
+
+    if raw:
+        filtered = [
+            s
+            for s in all_series
+            if raw in s.ticker.lower()
+            or raw in s.title.lower()
+            or raw in s.category.lower()
+            or any(raw in t.lower() for t in s.tags)
+        ]
+    else:
+        filtered = all_series
+
+    filtered = filtered[:30]
+    lines = [
+        f"env: {deps.settings.kalshi_env}   series returned: {len(all_series)}"
+        + (f"   filtered: {len(filtered)}" if raw else "")
+    ]
+    if not filtered:
+        lines.append("(no series match the filter)")
+    else:
+        for s in filtered:
+            lines.append(f"{s.ticker:20s}  [{s.category}]  {s.title[:60]}")
     await update.message.reply_text("\n".join(lines))
 
 

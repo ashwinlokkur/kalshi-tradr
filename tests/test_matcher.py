@@ -1,4 +1,4 @@
-from kalshi_tradr.kalshi.types import Event, Market
+from kalshi_tradr.kalshi.types import Event, Market, Series
 from kalshi_tradr.strategy import matcher
 
 
@@ -64,9 +64,31 @@ def test_rank_candidates_prefers_higher_token_overlap():
     ev2 = _mk_event("NBA-BOS-NYK", "Celtics vs Knicks", [m2])
     tokens = matcher.tokenize("gsw vs lakers")
     out = matcher.rank_candidates(tokens, [ev1, ev2], top_k=3)
+    # Warriors/Lakers matchup ranks first
     assert out[0].market.ticker == "NBA-LAL-GSW"
-    # Knicks/Celtics event should be filtered out (no token overlap)
-    assert all(c.market.ticker != "NBA-BOS-NYK" for c in out)
+    # Celtics/Knicks may weakly match via the shared NBA series ticker,
+    # but its score must be strictly lower.
+    other = [c for c in out if c.market.ticker == "NBA-BOS-NYK"]
+    if other:
+        assert out[0].score > other[0].score
+
+
+def test_pick_series_routes_sport_keyword():
+    nba = Series(ticker="KXNBAGAME", title="NBA games", category="Sports", tags=["basketball", "nba"])
+    nfl = Series(ticker="KXNFLGAME", title="NFL games", category="Sports", tags=["football"])
+    weather = Series(ticker="KXWEATHER", title="Weather", category="Climate", tags=["weather"])
+    # "gsw" expands to ["gsw", "warriors", "golden", "state", "nba", "basketball"]
+    tokens = matcher.tokenize("gsw vs lakers")
+    picked = matcher.pick_series(tokens, [nba, nfl, weather], top_k=5)
+    assert picked[0].ticker == "KXNBAGAME"
+    assert all(s.ticker != "KXWEATHER" for s in picked)
+
+
+def test_pick_series_empty_when_no_match():
+    weather = Series(ticker="KXWEATHER", title="Weather", category="Climate", tags=["weather"])
+    tokens = matcher.tokenize("gsw vs lakers")
+    picked = matcher.pick_series(tokens, [weather])
+    assert picked == []
 
 
 def test_rank_candidates_skips_closed_markets():

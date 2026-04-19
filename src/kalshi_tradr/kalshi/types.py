@@ -77,3 +77,12 @@ class Balance:
     @property
     def balance_usd(self) -> float:
         return self.balance_cents / 100
+
+
+@dataclass(slots=True)
+class Series:
+    ticker: str
+    title: str
+    category: str
+    tags: list[str] = field(default_factory=list)
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)

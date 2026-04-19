@@ -15,7 +15,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from .types import Balance, Event, Market, OrderResult, Position, RestingOrder
+from .types import Balance, Event, Market, OrderResult, Position, RestingOrder, Series
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,8 @@ class KalshiAsyncClient:
         self.api_key_id = api_key_id
         self._private_key = self._load_key(private_key_pem)
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        self._series_cache: tuple[float, list[Series]] | None = None
+        self._series_cache_ttl = 300.0  # seconds
 
     @staticmethod
     def _load_key(pem: str) -> rsa.RSAPrivateKey:
@@ -248,8 +250,44 @@ class KalshiAsyncClient:
         log.info("kalshi: /markets fetched %d markets across %d pages", len(out), pages)
         return out
 
-    async def list_open_events(self, *, page_size: int = 200, max_pages: int = 30) -> list[Event]:
+    async def list_series(self) -> list[Series]:
+        """List Kalshi series (categories) with a short-lived in-memory cache."""
+        if self._series_cache and (time.time() - self._series_cache[0]) < self._series_cache_ttl:
+            return self._series_cache[1]
+        out: list[Series] = []
+        cursor: str | None = None
+        for _ in range(20):
+            params: dict[str, Any] = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            data = await self._request("GET", "/series", params=params)
+            for s in data.get("series", []) or []:
+                out.append(
+                    Series(
+                        ticker=s.get("ticker", ""),
+                        title=s.get("title", ""),
+                        category=s.get("category", ""),
+                        tags=list(s.get("tags") or []),
+                        raw=s,
+                    )
+                )
+            cursor = data.get("cursor") or None
+            if not cursor:
+                break
+        log.info("kalshi: /series cached %d series", len(out))
+        self._series_cache = (time.time(), out)
+        return out
+
+    async def list_open_events(
+        self,
+        *,
+        series_ticker: str | None = None,
+        page_size: int = 200,
+        max_pages: int = 30,
+    ) -> list[Event]:
         params: dict[str, Any] = {"status": "open", "limit": page_size, "with_nested_markets": "true"}
+        if series_ticker:
+            params["series_ticker"] = series_ticker
         out: list[Event] = []
         cursor: str | None = None
         pages = 0
