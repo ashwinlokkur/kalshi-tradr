@@ -103,7 +103,9 @@ def parse_amount_tail(text: str) -> tuple[str, float | None]:
 def score_event(tokens: list[str], event: Event) -> float:
     if not tokens:
         return 0.0
-    haystack = f"{event.title} {event.sub_title} {event.event_ticker}".lower()
+    haystack = (
+        f"{event.title} {event.sub_title} {event.event_ticker} {event.series_ticker}"
+    ).lower()
     return sum(1.0 for tok in tokens if tok in haystack)
 
 

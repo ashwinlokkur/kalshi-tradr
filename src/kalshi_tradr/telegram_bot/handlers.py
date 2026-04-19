@@ -22,6 +22,7 @@ HELP_TEXT = (
     "Commands:\n"
     "  /scan              — lopsided markets closing in 1–3h\n"
     "  /bet <text> [amt]  — e.g. /bet warriors vs lakers 25\n"
+    "  /search <text>     — list open events whose title matches <text>\n"
     "  /status            — balance, positions, resting orders\n"
     "  /help              — this message\n"
     "\n"
@@ -72,6 +73,50 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------- /status
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Diagnostic: list up to 15 open events whose title matches the query tokens."""
+    deps = _deps(context)
+    if not _authorized(update, deps.settings):
+        return await _reject(update)
+    assert update.message is not None
+
+    raw = " ".join(context.args or []).strip()
+    if not raw:
+        await update.message.reply_text("Usage: /search <text>\nEx: /search nba")
+        return
+
+    tokens = matcher.tokenize(raw)
+    if not tokens:
+        await update.message.reply_text("No searchable tokens in query (all stopwords).")
+        return
+
+    try:
+        events = await deps.kalshi.list_open_events()
+    except KalshiAPIError as e:
+        await update.message.reply_text(f"Kalshi error: {e}")
+        return
+
+    scored = [(matcher.score_event(tokens, e), e) for e in events]
+    scored = [(s, e) for s, e in scored if s > 0]
+    scored.sort(key=lambda t: -t[0])
+    top = scored[:15]
+
+    lines = [
+        f"env: {deps.settings.kalshi_env}   tokens: {', '.join(tokens)}",
+        f"scanned {len(events)} open events; {len(scored)} matched.",
+    ]
+    if not top:
+        lines.append("")
+        lines.append("No matches. Sample of what's in the data right now:")
+        lines.extend(f"- {e.title}" for e in events[:10] if e.title)
+    else:
+        lines.append("")
+        lines.append("Top matches:")
+        for s, e in top:
+            lines.append(f"[{s:.0f}] {e.event_ticker}  {e.title[:80]}")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -248,7 +248,7 @@ class KalshiAsyncClient:
         log.info("kalshi: /markets fetched %d markets across %d pages", len(out), pages)
         return out
 
-    async def list_open_events(self, *, page_size: int = 200, max_pages: int = 10) -> list[Event]:
+    async def list_open_events(self, *, page_size: int = 200, max_pages: int = 30) -> list[Event]:
         params: dict[str, Any] = {"status": "open", "limit": page_size, "with_nested_markets": "true"}
         out: list[Event] = []
         cursor: str | None = None
