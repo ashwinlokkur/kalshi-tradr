@@ -229,11 +229,29 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     raw = " ".join(context.args or []).strip()
     log.info("cmd_bet: chat=%s user=%s raw=%r", update.effective_chat.id if update.effective_chat else None, update.effective_user.id if update.effective_user else None, raw)
     if not raw:
-        await update.message.reply_text("Usage: /bet <text> [amount]\nEx: /bet warriors vs lakers 25")
+        await update.message.reply_text(
+            "Usage: /bet <text|ticker|url> [amount]\n"
+            "Ex: /bet warriors vs lakers 25\n"
+            "Ex: /bet KXNBAGAME-26APR19PHIBOS\n"
+            "Ex: /bet https://kalshi.com/markets/kxnbagame/…/KXNBAGAME-26APR19PHIBOS 25"
+        )
         return
 
     query_text, amount_usd = matcher.parse_amount_tail(raw)
     log.info("cmd_bet: query_text=%r amount_usd=%s", query_text, amount_usd)
+
+    # First try: is this a Kalshi ticker or a kalshi.com URL? If so, skip the
+    # keyword matcher entirely and hit the exact market/event.
+    ticker = matcher.parse_ticker_or_url(query_text)
+    if ticker:
+        log.info("cmd_bet: ticker-path ticker=%s", ticker)
+        handled = await _handle_ticker_bet(
+            update=update, context=context, ticker=ticker, amount_usd=amount_usd
+        )
+        if handled:
+            return
+        # Fall through to keyword matcher if ticker couldn't be resolved.
+
     try:
         result = await matcher.find_candidates(deps.kalshi, query_text, top_k=3)
     except KalshiAPIError as e:
@@ -278,6 +296,86 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         market=c.market,
         amount_usd=amount_usd,
     )
+
+
+# ------------------------------------------------------- ticker/URL bet routing
+
+
+async def _handle_ticker_bet(
+    *,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    ticker: str,
+    amount_usd: float | None,
+) -> bool:
+    """Try to resolve `ticker` as an event or market and propose a bet.
+
+    Returns True if something was sent to the user (success or error message),
+    False if the ticker didn't resolve and the caller should fall back to the
+    keyword matcher.
+    """
+    deps = _deps(context)
+    msg = update.effective_message
+
+    # 1) Try as an event ticker (covers "KXNBAGAME-26APR19PHIBOS" URLs, which
+    #    point to an event page that usually contains several markets).
+    try:
+        event = await deps.kalshi.get_event(ticker)
+    except KalshiAPIError as e:
+        log.info("cmd_bet: get_event(%s) failed: %s", ticker, e)
+        event = None
+
+    if event is not None and event.markets:
+        open_markets = [
+            m for m in event.markets if not m.status or m.status == "open"
+        ]
+        if not open_markets:
+            if msg is not None:
+                await msg.reply_text(
+                    f"Event {ticker} has no open markets right now."
+                )
+            return True
+        if len(open_markets) == 1:
+            await _propose_bet(
+                update=update,
+                context=context,
+                market=open_markets[0],
+                amount_usd=amount_usd,
+            )
+            return True
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    f"{m.ticker}  — {(m.subtitle or m.title)[:40]}",
+                    callback_data=f"pick:{m.ticker}:{amount_usd or ''}",
+                )
+            ]
+            for m in open_markets[:10]
+        ]
+        if msg is not None:
+            await msg.reply_text(
+                f"Event {event.event_ticker}: {event.title}\nPick a market:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        return True
+
+    # 2) Try as a market ticker directly.
+    try:
+        market = await deps.kalshi.get_market(ticker)
+    except KalshiAPIError as e:
+        log.info("cmd_bet: get_market(%s) failed: %s", ticker, e)
+        if msg is not None:
+            await msg.reply_text(
+                f"Couldn't resolve {ticker} as a Kalshi event or market ({e})."
+            )
+        return True
+
+    if market.ticker:
+        await _propose_bet(
+            update=update, context=context, market=market, amount_usd=amount_usd
+        )
+        return True
+    return False
 
 
 # ---------------------------------------------------------- shared bet proposer

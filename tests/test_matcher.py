@@ -91,6 +91,46 @@ def test_pick_series_empty_when_no_match():
     assert picked == []
 
 
+def test_parse_ticker_or_url_bare_event_ticker():
+    assert matcher.parse_ticker_or_url("KXNBAGAME-26APR19PHIBOS") == "KXNBAGAME-26APR19PHIBOS"
+
+
+def test_parse_ticker_or_url_lowercase_ticker():
+    assert matcher.parse_ticker_or_url("kxnbagame-26apr19phibos") == "KXNBAGAME-26APR19PHIBOS"
+
+
+def test_parse_ticker_or_url_full_url():
+    url = "https://kalshi.com/markets/kxnbagame/professional-basketball-game/KXNBAGAME-26APR19PHIBOS?utm_source=kalshiapp_eventpage"
+    assert matcher.parse_ticker_or_url(url) == "KXNBAGAME-26APR19PHIBOS"
+
+
+def test_parse_ticker_or_url_url_without_scheme():
+    url = "kalshi.com/markets/kxnbagame/x/KXNBAGAME-26APR19PHIBOS"
+    assert matcher.parse_ticker_or_url(url) == "KXNBAGAME-26APR19PHIBOS"
+
+
+def test_parse_ticker_or_url_plain_words_returns_none():
+    assert matcher.parse_ticker_or_url("warriors vs lakers") is None
+
+
+def test_parse_ticker_or_url_non_kalshi_url_returns_none():
+    assert matcher.parse_ticker_or_url("https://example.com/KXNBAGAME-26APR19PHIBOS") is None
+
+
+def test_parse_amount_tail_ignores_digits_inside_url():
+    url = "https://kalshi.com/markets/kxnbagame/x/KXNBAGAME-26APR19PHIBOS?utm_source=kalshiapp_eventpage"
+    q, amt = matcher.parse_amount_tail(url)
+    assert q == url
+    assert amt is None
+
+
+def test_parse_amount_tail_strips_trailing_amount_after_url():
+    url = "https://kalshi.com/markets/kxnbagame/x/KXNBAGAME-26APR19PHIBOS 25"
+    q, amt = matcher.parse_amount_tail(url)
+    assert q.endswith("KXNBAGAME-26APR19PHIBOS")
+    assert amt == 25.0
+
+
 def test_rank_candidates_skips_closed_markets():
     open_m = _mk_market("NBA-1", "Warriors win", status="open")
     closed_m = _mk_market("NBA-2", "Warriors win again", status="closed")

@@ -332,6 +332,20 @@ class KalshiAsyncClient:
         data = await self._request("GET", f"/markets/{ticker}")
         return _parse_market(data.get("market") or data)
 
+    async def get_event(self, event_ticker: str) -> Event:
+        """Fetch a single event with its nested markets."""
+        data = await self._request(
+            "GET",
+            f"/events/{event_ticker}",
+            params={"with_nested_markets": "true"},
+        )
+        ev = data.get("event") or data
+        # Some payloads nest markets alongside the event rather than inside it.
+        if not ev.get("markets") and data.get("markets"):
+            ev = dict(ev)
+            ev["markets"] = data["markets"]
+        return _parse_event(ev)
+
     async def place_order(
         self,
         *,

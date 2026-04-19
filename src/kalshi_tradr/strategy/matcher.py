@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from ..kalshi.client import KalshiAsyncClient
 from ..kalshi.types import Event, Market, Series
@@ -119,18 +120,63 @@ def tokenize(text: str) -> list[str]:
     return out
 
 
+_AMOUNT_RE = re.compile(r"^\$?\d+(?:\.\d+)?$")
+
+
 def parse_amount_tail(text: str) -> tuple[str, float | None]:
-    """Pull an optional trailing USD amount off the request, e.g. '… lakers 25' or '$25.50'."""
+    """Pull an optional trailing USD amount off the request, e.g. '… lakers 25' or '$25.50'.
+
+    Uses whitespace splitting so embedded digits in a URL can't be mistaken for
+    an amount (the trailing token must be a bare number, optionally dollar-prefixed).
+    """
     t = text.strip()
-    m = re.search(r"(\$?\d+(?:\.\d+)?)\s*$", t)
-    if not m:
+    if not t:
         return t, None
-    raw = m.group(1).lstrip("$")
+    parts = t.split()
+    tail = parts[-1]
+    if not _AMOUNT_RE.match(tail):
+        return t, None
     try:
-        amount = float(raw)
+        amount = float(tail.lstrip("$"))
     except ValueError:
         return t, None
-    return t[: m.start()].rstrip(" ,.:;"), amount
+    head = " ".join(parts[:-1]).rstrip(" ,.:;")
+    return head, amount
+
+
+# A Kalshi ticker is uppercase alnum with at least one hyphen or underscore
+# separator: "KXNBAGAME", "KXNBAGAME-26APR19PHIBOS", "KXNBAGAME-26APR19PHIBOS-PHI".
+_TICKER_RE = re.compile(r"^[A-Z0-9]+(?:[-_][A-Z0-9]+)+$")
+
+
+def parse_ticker_or_url(text: str) -> str | None:
+    """If text is a Kalshi URL or bare ticker, return the ticker (uppercase).
+
+    Accepts:
+      - Bare ticker like "KXNBAGAME-26APR19PHIBOS" or "KXNBAGAME-26APR19PHIBOS-PHI"
+      - Kalshi web URLs like https://kalshi.com/markets/<series>/<slug>/<TICKER>?utm=...
+    Returns None if nothing ticker-shaped can be extracted.
+    """
+    s = text.strip()
+    if not s:
+        return None
+    # URL form: pull the last path segment that matches the ticker regex.
+    if "://" in s or s.startswith("kalshi.com") or s.startswith("www.kalshi.com"):
+        try:
+            url = s if "://" in s else "https://" + s
+            parsed = urlparse(url)
+        except ValueError:
+            parsed = None
+        if parsed and parsed.netloc and "kalshi.com" in parsed.netloc.lower():
+            for seg in reversed([p for p in parsed.path.split("/") if p]):
+                up = seg.upper()
+                if _TICKER_RE.match(up):
+                    return up
+            return None
+    up = s.upper()
+    if _TICKER_RE.match(up):
+        return up
+    return None
 
 
 def score_event(tokens: list[str], event: Event) -> float:
