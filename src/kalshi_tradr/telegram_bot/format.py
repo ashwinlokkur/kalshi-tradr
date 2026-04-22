@@ -47,8 +47,17 @@ def fmt_scan(hits: list[LopsidedHit]) -> str:
     return f"Lopsided markets closing soon:\n{body}"
 
 
-def fmt_balance(balance: Balance) -> str:
-    return f"Balance: ${balance.balance_usd:,.2f}"
+def fmt_balance(balance: Balance, positions: list[Position] | None = None) -> str:
+    cash = balance.balance_usd
+    if positions:
+        exposure = sum(p.market_exposure for p in positions) / 100
+        total = cash + exposure
+        return (
+            f"Cash: ${cash:,.2f}   "
+            f"Positions: ${exposure:,.2f}   "
+            f"Total: ${total:,.2f}"
+        )
+    return f"Cash: ${cash:,.2f}"
 
 
 def fmt_positions(positions: list[Position]) -> str:
@@ -56,8 +65,14 @@ def fmt_positions(positions: list[Position]) -> str:
         return "No open positions."
     rows = []
     for p in positions:
+        side = "YES" if p.position > 0 else "NO"
+        qty = abs(p.position)
         exposure_usd = p.market_exposure / 100
-        rows.append(f"- {p.ticker}: {p.position:+d} contracts (exposure ${exposure_usd:,.2f})")
+        pnl = p.realized_pnl / 100
+        pnl_str = f"  realized {'+' if pnl >= 0 else ''}${pnl:,.2f}" if pnl else ""
+        rows.append(
+            f"- {p.ticker}: {qty} {side} contracts  cost ${exposure_usd:,.2f}{pnl_str}"
+        )
     return "Positions:\n" + "\n".join(rows)
 
 
@@ -97,7 +112,7 @@ def fmt_status(
     orders: list[RestingOrder],
     recent: list[PlacedBetRow] | None = None,
 ) -> str:
-    parts = [fmt_balance(balance), fmt_positions(positions), fmt_orders(orders)]
+    parts = [fmt_balance(balance, positions), fmt_positions(positions), fmt_orders(orders)]
     if recent is not None:
         parts.append(fmt_recent_bets(recent))
     return "\n\n".join(parts)

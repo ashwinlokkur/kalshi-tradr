@@ -175,28 +175,35 @@ class KalshiAsyncClient:
         )
 
     async def get_positions(self) -> list[Position]:
-        """Return open (non-zero) market positions. Paginates until exhausted."""
+        """Return non-zero market positions. Paginates until exhausted.
+
+        Uses default server-side filtering (no settlement_status / count_filter)
+        and filters `position == 0` in Python so we never accidentally drop
+        legitimate rows because of a param rejected by the server.
+        """
         out: list[Position] = []
         total_rows = 0
+        sample_logged = False
         cursor: str | None = None
         for _ in range(20):
-            params: dict[str, Any] = {
-                "limit": 200,
-                "settlement_status": "unsettled",
-                "count_filter": "position",
-            }
+            params: dict[str, Any] = {"limit": 200}
             if cursor:
                 params["cursor"] = cursor
             data = await self._request("GET", "/portfolio/positions", params=params)
             rows = data.get("market_positions", []) or []
             total_rows += len(rows)
+            if rows and not sample_logged:
+                log.info("kalshi: /portfolio/positions sample row keys=%s first=%s",
+                         list(rows[0].keys()), rows[0])
+                sample_logged = True
             for d in rows:
-                if int(d.get("position", 0)) == 0:
+                pos = int(d.get("position", 0))
+                if pos == 0:
                     continue
                 out.append(
                     Position(
                         ticker=d.get("ticker", ""),
-                        position=int(d.get("position", 0)),
+                        position=pos,
                         market_exposure=int(d.get("market_exposure", 0)),
                         realized_pnl=int(d.get("realized_pnl", 0)),
                         raw=d,
@@ -206,7 +213,7 @@ class KalshiAsyncClient:
             if not cursor:
                 break
         log.info(
-            "kalshi: /portfolio/positions returned %d rows, %d with position != 0",
+            "kalshi: /portfolio/positions → %d rows total, %d with position != 0",
             total_rows, len(out),
         )
         return out
