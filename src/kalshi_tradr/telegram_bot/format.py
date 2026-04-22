@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from ..db import PlacedBetRow
-from ..kalshi.types import Balance, LopsidedHit, Market, Position, RestingOrder
+from ..kalshi.types import Balance, Event, LopsidedHit, Market, Position, RestingOrder
 
 
 def fmt_time_until(ts: int) -> str:
@@ -143,6 +143,50 @@ def fmt_market_card(market: Market) -> str:
         f"  {fmt_market_quote(market)}  closes in {fmt_time_until(market.close_ts)}"
     )
     return "\n".join(lines)
+
+
+def fmt_search_event(event: Event, *, max_markets: int = 4) -> str:
+    """Event card for /search: title, close time, and a compact per-market quote."""
+    close_ts = event.markets[0].close_ts if event.markets else 0
+    header_bits = [f"[{event.event_ticker}]  {event.title}"]
+    if event.sub_title:
+        header_bits.append(f"  {event.sub_title}")
+    if close_ts:
+        header_bits.append(f"  closes in {fmt_time_until(close_ts)}")
+    lines = [*header_bits]
+    if not event.markets:
+        lines.append("  (no markets returned — try /bet " + event.event_ticker + ")")
+        return "\n".join(lines)
+    shown = event.markets[:max_markets]
+    lines.append(f"  Markets ({len(event.markets)}):")
+    for m in shown:
+        label = m.subtitle or m.title
+        implied = _implied_pct(m.yes_ask or m.last_price)
+        vol = f"vol={m.volume:,}" if m.volume else "vol=0"
+        last = f"last={m.last_price}¢" if m.last_price else "last=?"
+        lines.append(
+            f"  · {m.ticker}"
+            f"\n      {label}"
+            f"\n      YES {m.yes_bid or '?'}/{m.yes_ask or '?'}¢   "
+            f"NO {m.no_bid or '?'}/{m.no_ask or '?'}¢   "
+            f"(implied {implied})"
+            f"\n      {last}   {vol}"
+        )
+    hidden = len(event.markets) - len(shown)
+    if hidden > 0:
+        lines.append(f"  … {hidden} more market(s)")
+    return "\n".join(lines)
+
+
+def fmt_bet_howto() -> str:
+    return (
+        "How to bet from the results above:\n"
+        "  /bet <event_ticker> [amount]    — e.g. /bet KXIPLGAME-26APR23CSKMI 10\n"
+        "                                     (picks a market via inline buttons)\n"
+        "  /bet <market_ticker> [amount]   — jumps straight to the confirm prompt\n"
+        "  /bet <kalshi.com URL> [amount]  — paste the URL from the Kalshi app\n"
+        "Omit the amount to use Quarter-Kelly sizing (capped by MAX_BET_USD)."
+    )
 
 
 def fmt_confirm(

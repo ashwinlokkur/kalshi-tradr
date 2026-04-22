@@ -76,8 +76,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------- /status
 
 
+_SEARCH_TOP_DETAIL = 5
+_SEARCH_TOP_LIST = 15
+
+
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Diagnostic: list up to 15 open events whose title matches the query tokens."""
+    """List matching events with per-market quotes + instructions to place a bet."""
     deps = _deps(context)
     if not _authorized(update, deps.settings):
         return await _reject(update)
@@ -102,23 +106,43 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     scored = [(matcher.score_event(tokens, e), e) for e in events]
     scored = [(s, e) for s, e in scored if s > 0]
     scored.sort(key=lambda t: -t[0])
-    top = scored[:15]
+    detail = scored[:_SEARCH_TOP_DETAIL]
+    extra = scored[_SEARCH_TOP_DETAIL:_SEARCH_TOP_LIST]
 
-    lines = [
+    # Hydrate markets for any top events the API returned with empty nested markets.
+    for _, ev in detail:
+        if ev.markets:
+            continue
+        try:
+            ev.markets = await deps.kalshi.list_markets_for_event(ev.event_ticker)
+        except KalshiAPIError as e:
+            log.info("cmd_search: hydrate %s failed: %s", ev.event_ticker, e)
+
+    header = [
         f"env: {deps.settings.kalshi_env}   tokens: {', '.join(tokens)}",
         f"series routed: {', '.join(series_used) if series_used else '(none — broad /events fetch)'}",
         f"scanned {len(events)} open events; {len(scored)} matched.",
     ]
-    if not top:
-        lines.append("")
-        lines.append("No matches. Sample of what's in the data right now:")
-        lines.extend(f"- {e.title}" for e in events[:10] if e.title)
-    else:
-        lines.append("")
-        lines.append("Top matches:")
-        for s, e in top:
-            lines.append(f"[{s:.0f}] {e.event_ticker}  {e.title[:80]}")
-    await update.message.reply_text("\n".join(lines))
+    if not detail:
+        header.append("")
+        header.append("No matches. Sample of what's in the data right now:")
+        header.extend(f"- {e.title}" for e in events[:10] if e.title)
+        await update.message.reply_text("\n".join(header))
+        return
+
+    sections = ["\n".join(header), ""]
+    sections.append(f"Top {len(detail)} match(es):")
+    for _, ev in detail:
+        sections.append("")
+        sections.append(fmt.fmt_search_event(ev))
+    if extra:
+        sections.append("")
+        sections.append(f"+ {len(extra)} more (refine your query for details):")
+        for _, ev in extra:
+            sections.append(f"  [{ev.event_ticker}]  {ev.title[:70]}")
+    sections.append("")
+    sections.append(fmt.fmt_bet_howto())
+    await update.message.reply_text("\n".join(sections))
 
 
 async def cmd_series(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
