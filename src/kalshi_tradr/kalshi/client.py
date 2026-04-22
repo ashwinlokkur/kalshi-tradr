@@ -175,20 +175,40 @@ class KalshiAsyncClient:
         )
 
     async def get_positions(self) -> list[Position]:
-        data = await self._request("GET", "/portfolio/positions", params={"limit": 200})
+        """Return open (non-zero) market positions. Paginates until exhausted."""
         out: list[Position] = []
-        for d in data.get("market_positions", []) or []:
-            if int(d.get("position", 0)) == 0:
-                continue
-            out.append(
-                Position(
-                    ticker=d.get("ticker", ""),
-                    position=int(d.get("position", 0)),
-                    market_exposure=int(d.get("market_exposure", 0)),
-                    realized_pnl=int(d.get("realized_pnl", 0)),
-                    raw=d,
+        total_rows = 0
+        cursor: str | None = None
+        for _ in range(20):
+            params: dict[str, Any] = {
+                "limit": 200,
+                "settlement_status": "unsettled",
+                "count_filter": "position",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            data = await self._request("GET", "/portfolio/positions", params=params)
+            rows = data.get("market_positions", []) or []
+            total_rows += len(rows)
+            for d in rows:
+                if int(d.get("position", 0)) == 0:
+                    continue
+                out.append(
+                    Position(
+                        ticker=d.get("ticker", ""),
+                        position=int(d.get("position", 0)),
+                        market_exposure=int(d.get("market_exposure", 0)),
+                        realized_pnl=int(d.get("realized_pnl", 0)),
+                        raw=d,
+                    )
                 )
-            )
+            cursor = data.get("cursor") or None
+            if not cursor:
+                break
+        log.info(
+            "kalshi: /portfolio/positions returned %d rows, %d with position != 0",
+            total_rows, len(out),
+        )
         return out
 
     async def get_resting_orders(self) -> list[RestingOrder]:

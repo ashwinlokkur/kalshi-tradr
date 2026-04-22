@@ -62,6 +62,18 @@ class PendingBet:
     expires_at: datetime
 
 
+@dataclass(slots=True)
+class PlacedBetRow:
+    ticker: str
+    side: str
+    count: int
+    price_cents: int
+    cost_usd: Decimal
+    status: str
+    error: str | None
+    created_at: datetime
+
+
 class Database:
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -149,6 +161,32 @@ class Database:
             reason=row["reason"],
             expires_at=row["expires_at"],
         )
+
+    async def recent_placed_bets(self, chat_id: int, *, limit: int = 5) -> list[PlacedBetRow]:
+        rows = await self.pool.fetch(
+            """
+            SELECT ticker, side, count, price_cents, cost_usd, status, error, created_at
+            FROM placed_bets
+            WHERE chat_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            chat_id,
+            limit,
+        )
+        return [
+            PlacedBetRow(
+                ticker=r["ticker"],
+                side=r["side"],
+                count=r["count"],
+                price_cents=r["price_cents"],
+                cost_usd=r["cost_usd"],
+                status=r["status"],
+                error=r["error"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
 
     async def record_placed_bet(
         self,

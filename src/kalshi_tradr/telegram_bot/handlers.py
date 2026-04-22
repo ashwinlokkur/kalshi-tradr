@@ -165,6 +165,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not _authorized(update, deps.settings):
         return await _reject(update)
     assert update.message is not None
+    chat = update.effective_chat
     try:
         balance = await deps.kalshi.get_balance()
         positions = await deps.kalshi.get_positions()
@@ -172,7 +173,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except KalshiAPIError as e:
         await update.message.reply_text(f"Kalshi error: {e}")
         return
-    await update.message.reply_text(fmt.fmt_status(balance, positions, orders))
+    recent = await deps.db.recent_placed_bets(chat.id, limit=5) if chat is not None else []
+    await update.message.reply_text(fmt.fmt_status(balance, positions, orders, recent))
 
 
 # ------------------------------------------------------------------------ /scan
@@ -273,17 +275,23 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if len(result.candidates) > 1:
+        text_lines = ["Multiple markets match — pick one:", ""]
+        for c in result.candidates:
+            text_lines.append(f"· {c.event.title}")
+            text_lines.append("  " + fmt.fmt_market_card(c.market).replace("\n", "\n  "))
+            text_lines.append("")
         buttons = [
             [
                 InlineKeyboardButton(
-                    f"{c.market.ticker}  ({c.event.title[:40]})",
+                    f"{c.market.ticker} — YES {c.market.yes_ask or '?'}¢ / NO {c.market.no_ask or '?'}¢",
                     callback_data=f"pick:{c.market.ticker}:{amount_usd or ''}",
                 )
             ]
             for c in result.candidates
         ]
         await update.message.reply_text(
-            "Multiple markets match — pick one:", reply_markup=InlineKeyboardMarkup(buttons)
+            "\n".join(text_lines).rstrip(),
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
 
@@ -325,14 +333,28 @@ async def _handle_ticker_bet(
         log.info("cmd_bet: get_event(%s) failed: %s", ticker, e)
         event = None
 
-    if event is not None and event.markets:
-        open_markets = [
-            m for m in event.markets if not m.status or m.status == "open"
-        ]
-        if not open_markets:
+    if event is not None:
+        markets = list(event.markets)
+        if not markets:
+            # /events/{ticker} sometimes returns the event with no nested markets.
+            # Fall back to /markets?event_ticker=…
+            try:
+                markets = await deps.kalshi.list_markets_for_event(ticker)
+                log.info("cmd_bet: event %s had no inline markets; /markets fallback → %d", ticker, len(markets))
+            except KalshiAPIError as e:
+                log.info("cmd_bet: list_markets_for_event(%s) failed: %s", ticker, e)
+                markets = []
+        open_markets = [m for m in markets if _is_tradable(m)]
+        log.info(
+            "cmd_bet: event %s → %d markets (%d tradable, statuses=%s)",
+            ticker, len(markets), len(open_markets), [m.status for m in markets],
+        )
+        if markets and not open_markets:
             if msg is not None:
+                statuses = ", ".join(sorted({m.status or "?" for m in markets}))
                 await msg.reply_text(
-                    f"Event {ticker} has no open markets right now."
+                    f"Event {ticker} has {len(markets)} markets but none are tradable "
+                    f"(statuses: {statuses})."
                 )
             return True
         if len(open_markets) == 1:
@@ -343,21 +365,32 @@ async def _handle_ticker_bet(
                 amount_usd=amount_usd,
             )
             return True
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    f"{m.ticker}  — {(m.subtitle or m.title)[:40]}",
-                    callback_data=f"pick:{m.ticker}:{amount_usd or ''}",
-                )
+        if len(open_markets) > 1:
+            shown = open_markets[:10]
+            text_lines = [
+                f"Event {event.event_ticker}: {event.title}",
+                f"Closes: {fmt.fmt_close(shown[0].close_ts)} (in {fmt.fmt_time_until(shown[0].close_ts)})",
+                "",
+                "Markets:",
             ]
-            for m in open_markets[:10]
-        ]
-        if msg is not None:
-            await msg.reply_text(
-                f"Event {event.event_ticker}: {event.title}\nPick a market:",
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-        return True
+            for m in shown:
+                text_lines.append(fmt.fmt_market_card(m))
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"{(m.subtitle or m.title)[:30]} — YES {m.yes_ask or '?'}¢ / NO {m.no_ask or '?'}¢",
+                        callback_data=f"pick:{m.ticker}:{amount_usd or ''}",
+                    )
+                ]
+                for m in shown
+            ]
+            if msg is not None:
+                await msg.reply_text(
+                    "\n".join(text_lines),
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                )
+            return True
+        # event resolved but had zero markets at all — fall through to market lookup
 
     # 2) Try as a market ticker directly.
     try:
@@ -376,6 +409,14 @@ async def _handle_ticker_bet(
         )
         return True
     return False
+
+
+_UNTRADABLE_STATUSES = {"closed", "settled", "finalized", "expired", "cancelled", "canceled"}
+
+
+def _is_tradable(market: Market) -> bool:
+    st = (market.status or "").lower()
+    return st not in _UNTRADABLE_STATUSES
 
 
 # ---------------------------------------------------------- shared bet proposer
