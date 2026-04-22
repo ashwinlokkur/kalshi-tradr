@@ -67,11 +67,12 @@ def fmt_positions(positions: list[Position]) -> str:
     for p in positions:
         side = "YES" if p.position > 0 else "NO"
         qty = abs(p.position)
+        qty_str = f"{qty:.2f}" if abs(qty - round(qty)) > 1e-6 else f"{int(round(qty))}"
         exposure_usd = p.market_exposure / 100
         pnl = p.realized_pnl / 100
         pnl_str = f"  realized {'+' if pnl >= 0 else ''}${pnl:,.2f}" if pnl else ""
         rows.append(
-            f"- {p.ticker}: {qty} {side} contracts  cost ${exposure_usd:,.2f}{pnl_str}"
+            f"- {p.ticker}: {qty_str} {side} contracts  cost ${exposure_usd:,.2f}{pnl_str}"
         )
     return "Positions:\n" + "\n".join(rows)
 

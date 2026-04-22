@@ -54,6 +54,43 @@ def _parse_event(d: dict[str, Any]) -> Event:
     )
 
 
+def _parse_position(d: dict[str, Any]) -> float:
+    """Return a signed contract count, preferring integer `position` if present."""
+    raw = d.get("position")
+    if raw is not None:
+        try:
+            v = float(raw)
+            if v != 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    fp = d.get("position_fp")
+    if fp is not None:
+        try:
+            return float(fp)
+        except (TypeError, ValueError):
+            pass
+    return 0.0
+
+
+def _cents_from_row(d: dict[str, Any], base: str) -> int:
+    """Read a cents value from a Kalshi row under either `<base>` (int cents) or
+    `<base>_dollars` (string dollars, e.g. "4.854600")."""
+    raw = d.get(base)
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    dollars = d.get(f"{base}_dollars")
+    if dollars is not None:
+        try:
+            return int(round(float(dollars) * 100))
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
 def _ts(value: Any) -> int:
     """Accept either Unix seconds (int) or ISO-8601 string and return Unix seconds."""
     if value is None:
@@ -177,9 +214,10 @@ class KalshiAsyncClient:
     async def get_positions(self) -> list[Position]:
         """Return non-zero market positions. Paginates until exhausted.
 
-        Uses default server-side filtering (no settlement_status / count_filter)
-        and filters `position == 0` in Python so we never accidentally drop
-        legitimate rows because of a param rejected by the server.
+        Kalshi's response shape varies: older payloads carried integer `position`
+        and integer-cents `market_exposure` / `realized_pnl`; newer ones use
+        `position_fp` (string, can be fractional) and `_dollars` string fields.
+        We read both, preferring the integer form when present.
         """
         out: list[Position] = []
         total_rows = 0
@@ -197,15 +235,15 @@ class KalshiAsyncClient:
                          list(rows[0].keys()), rows[0])
                 sample_logged = True
             for d in rows:
-                pos = int(d.get("position", 0))
+                pos = _parse_position(d)
                 if pos == 0:
                     continue
                 out.append(
                     Position(
                         ticker=d.get("ticker", ""),
                         position=pos,
-                        market_exposure=int(d.get("market_exposure", 0)),
-                        realized_pnl=int(d.get("realized_pnl", 0)),
+                        market_exposure=_cents_from_row(d, "market_exposure"),
+                        realized_pnl=_cents_from_row(d, "realized_pnl"),
                         raw=d,
                     )
                 )

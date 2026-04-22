@@ -50,7 +50,7 @@ class OrderResult:
 @dataclass(slots=True)
 class Position:
     ticker: str
-    position: int
+    position: float  # signed contracts; positive = YES, negative = NO. Fractional in some markets.
     market_exposure: int  # cents
     realized_pnl: int  # cents
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
