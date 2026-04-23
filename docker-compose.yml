@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kalshi
+      POSTGRES_PASSWORD: kalshi
+      POSTGRES_DB: kalshi_tradr
+    volumes:
+      - kalshi_pgdata:/var/lib/postgresql/data
+    ports:
+      # Exposed locally so you can `psql` into it for debugging.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kalshi -d kalshi_tradr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    build: .
+    image: kalshi-tradr:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL so the container talks to the compose-managed db
+      # regardless of what .env says.
+      DATABASE_URL: postgresql://kalshi:kalshi@postgres:5432/kalshi_tradr
+    volumes:
+      # RSA private key is mounted in read-only; keep it out of the image.
+      - ./secrets:/app/secrets:ro
+
+volumes:
+  kalshi_pgdata:

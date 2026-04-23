@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kalshi-tradr-config
+data:
+  KALSHI_ENV: "demo"
+  KALSHI_PRIVATE_KEY_PEM_PATH: "/app/secrets/kalshi.pem"
+  BET_CONFIRM_REQUIRED: "true"
+  KELLY_FRACTION: "0.25"
+  MAX_BET_USD: "100"
+  EDGE_BUFFER: "0.02"
+  SCAN_MIN_PROB: "0.90"
+  SCAN_MIN_HOURS: "1"
+  SCAN_MAX_HOURS: "3"
+  SCAN_LIMIT: "10"
+  LOG_LEVEL: "INFO"

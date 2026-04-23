@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Telegram long-polling: only one pod may consume updates.
+  selector:
+    matchLabels:
+      app: bot
+  template:
+    metadata:
+      labels:
+        app: bot
+    spec:
+      containers:
+        - name: bot
+          image: kalshi-tradr:local
+          imagePullPolicy: IfNotPresent  # image is loaded into the local cluster
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: kalshi-tradr-secrets
+                  key: DATABASE_URL
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kalshi-tradr-secrets
+                  key: TELEGRAM_BOT_TOKEN
+            - name: TELEGRAM_ALLOWED_CHAT_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: kalshi-tradr-secrets
+                  key: TELEGRAM_ALLOWED_CHAT_IDS
+            - name: KALSHI_API_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: kalshi-tradr-secrets
+                  key: KALSHI_API_KEY_ID
+          envFrom:
+            - configMapRef:
+                name: kalshi-tradr-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: kalshi-key
+              mountPath: /app/secrets
+              readOnly: true
+      volumes:
+        - name: kalshi-key
+          secret:
+            secretName: kalshi-tradr-secrets
+            items:
+              - key: kalshi.pem
+                path: kalshi.pem
